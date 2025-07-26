@@ -45,12 +45,13 @@ export class ProducerService implements OnModuleInit, OnApplicationShutdown {
     console.log('ProducerService: Kafka producer connected.');
   }
 
-  async sendMessage(topic: string, message: any) {
+  async sendMessage(topic: string, key: string, message: any) {
     try {
       await this.producer.send({
         topic,
         messages: [
           {
+            key: key,
             value: JSON.stringify(message),
           },
         ],

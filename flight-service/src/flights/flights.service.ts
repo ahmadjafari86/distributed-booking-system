@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { CreateFlightDto } from './dto/create-flight.dto';
@@ -10,15 +11,35 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Flight } from './entities/flight.entity';
 import { Repository } from 'typeorm';
 import { FlightReservation } from './entities/flight-reservation.entity';
+import { ConfigService } from '@nestjs/config';
+import { ProducerService } from 'src/kafka/producer.service';
 
 @Injectable()
 export class FlightsService {
+  KAFKA_REQUEST_TOPIC: string;
+  KAFKA_RESULT_TOPIC: string;
+
   constructor(
     @InjectRepository(Flight)
     private readonly flightRepository: Repository<Flight>,
     @InjectRepository(FlightReservation)
     private reservationRepository: Repository<FlightReservation>,
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly producerService: ProducerService,
+  ) {
+    const kafkaRequestTopic = this.configService.get<string>(
+      'KAFKA_REQUEST_TOPIC',
+    );
+    const kafkaResultTopic =
+      this.configService.get<string>('KAFKA_RESULT_TOPIC');
+    if (!kafkaRequestTopic || !kafkaResultTopic) {
+      throw new InternalServerErrorException(
+        'KAFKA_BROKERS or KAFKA_CLIENT_ID environment variable is not set.',
+      );
+    }
+    this.KAFKA_REQUEST_TOPIC = kafkaRequestTopic;
+    this.KAFKA_RESULT_TOPIC = kafkaResultTopic;
+  }
 
   async create(createFlightDto: CreateFlightDto) {
     const flight = this.flightRepository.create(createFlightDto);
@@ -103,7 +124,19 @@ export class FlightsService {
       seatCount: reserveDto.seatCount,
     });
 
-    return await this.reservationRepository.save(reservation);
+    const savedReservation = await this.reservationRepository.save(reservation);
+
+    await this.producerService.sendMessage(
+      this.KAFKA_RESULT_TOPIC,
+      reservation.id,
+      {
+        flightId: reserveDto.flightId,
+        seatCount: reserveDto.seatCount,
+        reservationId: reservation.id,
+      },
+    );
+
+    return savedReservation;
   }
 
   async cancelReservation(id: string) {
